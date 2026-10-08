@@ -1,0 +1,62 @@
+# TalentHub+ (TH+) Project Specification
+**Date:** 2026-10-08
+**Status:** In-Progress (Design Phase)
+
+## 1. Product Vision
+TalentHub+ is a premium talent agency app ("Your talent deserves the world's stage.") where artists and dancers are discovered, developed, and celebrated. It is a cinematic, elegant, premium, dark-themed experience focused on livestreams, announcements, and artist spotlights.
+
+**Tagline:** "Where Talent Finds Its Stage."
+
+### User Roles
+- **viewer**: Watches lives, reads announcements, browses artists, chats in lives (must be signed in to chat).
+- **artist**: All viewer capabilities + go live, post announcements, edit own profile.
+- **admin**: All above + manage users/roles, feature artists, pin announcements, moderate chat, end any stream.
+
+## 2. Design System
+**Theme:** Dark-first.
+- **Background:** #0A0A0A
+- **Surfaces:** #141414 / #1C1C1C
+- **Accents:** Gold (#C9A44C), Light Gold (#E3C16F), Cream (#F8F1E0).
+- **Text:** White #FFFFFF (Primary), #B8B8B8 (Secondary).
+- **Indicators:** Error #E5484D, Live Indicator red #FF3B30.
+
+**Typography:**
+- **Headings/Wordmark:** Playfair Display.
+- **Body/UI:** Inter.
+- **Style:** Tracking-wide small caps for eyebrow labels (e.g., "TALENTHUB+ · EST. 2026").
+
+**UI Principles:**
+- **Anti-Template Policy:** No generic Tailwind/shadcn looks. Intentional, opinionated design.
+- **Components:** Rounded corners (12-16px), gold primary buttons, subtle 1px borders (#2A2A2A).
+- **Motion:** Smooth transitions, pulsing "LIVE" badge, fade-ins. Respect reduced-motion.
+
+## 3. Technical Stack
+- **Frontend:** Flutter (Dart), Riverpod (State), go_router (Routing), Freezed (Models).
+- **Backend:** Firebase (Auth, Firestore, Storage, Functions, App Check).
+- **Livestreaming:** AWS IVS (Interactive Video Service).
+    - **Broadcaster:** Native AWS IVS Broadcast SDK via Platform Channels.
+    - **Viewer:** AWS IVS Player SDK via Platform Views.
+    - **Auth:** Private channels with signed playback tokens via Cloud Functions.
+
+## 4. Architecture
+**Pattern:** Feature-first Clean Architecture.
+- **Layers:** Presentation $\rightarrow$ Provider $\rightarrow$ Repository Interface (`domain/`) $\rightarrow$ Repository Implementation (`data/`).
+- **Home Feed Logic (Hybrid Orchestrator):**
+    - **Live Tab:** Firestore Stream $\rightarrow$ StreamProvider (Real-time).
+    - **Announcements/Artists:** Cursor-based pagination $\rightarrow$ AsyncNotifier (Cached) $\rightarrow$ Pull-to-refresh.
+- **Navigation:** Nested PageView.
+    - Outer: Horizontal (Live | Announcements | Artists).
+    - Inner: Vertical (Content Reel).
+
+## 5. Security Model (The "Fort Knox" Standard)
+**Core Principle:** Server-First. Clients read, but critical state is written only via Cloud Functions.
+
+- **Authorization:** Firebase Custom Claims (`role`, `banned`).
+- **Role Lifecycle:** Viewer $\rightarrow$ Submit Audition $\rightarrow$ Admin Review $\rightarrow$ `setUserRole` Function $\rightarrow$ Custom Claim `role: 'artist'`.
+- **Ban System:** `banUser` Function $\rightarrow$ Custom Claim `banned: true` $\rightarrow$ `revokeRefreshTokens` $\rightarrow$ Rule `isNotBanned()` blocks all writes.
+- **Stream Security:**
+    - Ingest keys generated and rotated per stream via Cloud Functions.
+    - No usable playback URLs stored in Firestore; signed tokens provided via callable.
+    - Server-side stream termination.
+- **Data Validation:** Strict regex for URLs and handles, length limits, and type checking in Firestore rules.
+- **Integrity:** Firebase App Check enforced on all backend services.

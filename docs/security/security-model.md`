@@ -1,0 +1,33 @@
+# Security Implementation Manual
+**Status:** Finalizing Rules (v4.0+)
+
+## 1. Authorization Matrix
+| Action | Viewer | Artist | Admin | Enforcement |
+| :--- | :---: | :---: | :---: | :--- |
+| Read Profiles | $\checkmark$ | $\checkmark$ | $\checkmark$ | Rules |
+| Update Own Profile | $\checkmark$ | $\checkmark$ | $\checkmark$ | Rules (Limited Keys) |
+| Go Live | $\times$ | $\checkmark$ | $\checkmark$ | Callable + Claim |
+| Post Announcement | $\times$ | $\checkmark$ | $\checkmark$ | Rules + Claim |
+| Pin Announcement | $\times$ | $\times$ | $\checkmark$ | Rules + Claim |
+| Moderate Chat | $\times$ | $\times$ | $\checkmark$ | Rules + Claim |
+| Promote Artist | $\times$ | $\times$ | $\checkmark$ | Callable |
+| Ban User | $\times$ | $\times$ | $\checkmark$ | Callable |
+
+## 2. The "Fort Knox" Rules Strategy
+### Firestore
+- **Default Deny:** `match /{document=**} { allow read, write: if false; }` at the end of all rules.
+- **Ban-Gating:** `request.auth.token.banned != true` required for ALL client writes.
+- **No Client-Side Escalation:** `role`, `isFeatured`, `isBanned` are immutable for clients.
+- **Input Validation:** Rigid regex for handles and URLs; mandatory `createdAt == request.time`.
+
+### Storage
+- **Path Scoping:** User photos restricted to `profile_photos/{uid}/`.
+- **Announcement Media:** Restricted to `announcements/{uid}/` for the author.
+- **Content Validation:** `image/*` MIME type check and size limits (5MB/8MB).
+
+## 3. Cloud Function Gatekeepers
+Critical operations are routed through Callables to bypass Firestore rule limitations:
+- `sendMessage`: Implements 2s cooldown and profanity filtering.
+- `startBroadcasting`: Validates Artist role, email verification, and issues IVS key.
+- `setUserRole`: Merges custom claims and writes to `audit_logs`.
+- `banUser`: Sets `banned: true` claim and revokes refresh tokens.

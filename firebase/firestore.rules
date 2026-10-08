@@ -1,0 +1,177 @@
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- Helper Functions ---
+    function isSignedIn() { return request.auth != null; }
+    function hasRole(role) { return request.auth.token.role == role; }
+    function isOwner(uid) { return request.auth.uid == uid; }
+    function isNotBanned() { return request.auth.token.banned != true; }
+    function isAdmin() { return hasRole('admin'); }
+    function isEmailVerified() { return request.auth.token.email_verified == true; }
+
+    // General HTTPS: Valid host, no control chars/spaces, max 300
+    function isHttpsUrl(url) {
+      return url is string && url.size() <= 300 && url.matches('^https://[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}[^\\s\\x00-\\x1F]*$');
+    }
+
+    function isHandle(val) {
+      return val is string && val.size() <= 30 && val.matches('^[a-zA-Z0-9._]*[a-zA-Z0-9][a-zA-Z0-9._]*$');
+    }
+
+    function isInstagram(val) {
+      return val is string && (val == '' || isHandle(val) || val.size() <= 300 && val.matches('^https://(www\\.)?instagram\\.com/[a-zA-Z0-9_.]{1,30}/?(\\?[^\\s\\x00-\\x1F]*)?$'));
+    }
+
+    function isTikTok(val) {
+      return val is string && (val == '' || isHandle(val) || val.size() <= 300 && val.matches('^https://(www\\.)?tiktok\\.com/@[a-zA-Z0-9_.]{1,30}/?(\\?[^\\s\\x00-\\x1F]*)?$'));
+    }
+
+    function isYouTube(val) {
+      return val is string && (val == '' || isHandle(val) || val.size() <= 300 && (
+        val.matches('^https://(www\\.)?youtube\\.com/@[a-zA-Z0-9_.]{1,30}/?(\\?[^\\s\\x00-\\x1F]*)?$') ||
+        val.matches('^https://(www\\.)?youtube\\.com/c/[a-zA-Z0-9_.]{1,30}/?(\\?[^\\s\\x00-\\x1F]*)?$') ||
+        val.matches('^https://(www\\.)?youtube\\.com/channel/[a-zA-Z0-9_-]{24}/?(\\?[^\\s\\x00-\\x1F]*)?$') ||
+        val.matches('^https://(www\\.)?youtube\\.com/user/[a-zA-Z0-9_.]{1,30}/?(\\?[^\\s\\x00-\\x1F]*)?$') ||
+        val.matches('^https://youtu\\.be/[a-zA-Z0-9_-]{11}/?(\\?[^\\s\\x00-\\x1F]*)?$')
+      ));
+    }
+
+    function isOwnStorageUrl(uid, url) {
+      // Validates that the URL is from our Firebase Storage and points to the user's profile photo path.
+      // Handles %2F encoding for the '/' character in storage paths.
+      return url is string && url.size() <= 300 && url.matches('^https://firebasestorage\\.googleapis\\.com/v0/b/[^/]+/o/profile_photos%2F' + uid + '/[^\\s\\x00-\\x1F]*$');
+    }
+
+    // --- USERS ---
+    match /users/{uid} {
+      allow read: if isSignedIn() && (isOwner(uid) || isNotBanned());
+
+      allow create: if isSignedIn() && isOwner(uid)
+                    && request.resource.data.keys().hasAll(['displayName', 'photoUrl', 'specialty', 'bio', 'instagram', 'tiktok', 'youtube', 'role', 'isFeatured', 'isBanned', 'createdAt', 'updatedAt'])
+                    && request.resource.data.keys().hasOnly(['displayName', 'photoUrl', 'specialty', 'bio', 'instagram', 'tiktok', 'youtube', 'role', 'isFeatured', 'isBanned', 'createdAt', 'updatedAt'])
+                    && request.resource.data.role == 'viewer'
+                    && request.resource.data.isFeatured == false
+                    && request.resource.data.isBanned == false
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time
+                    && request.resource.data.displayName is string && request.resource.data.displayName.size() <= 50
+                    && request.resource.data.bio is string && request.resource.data.bio.size() <= 300
+                    && request.resource.data.specialty is string && request.resource.data.specialty.size() <= 100
+                    && isOwnStorageUrl(uid, request.resource.data.photoUrl)
+                    && isInstagram(request.resource.data.instagram)
+                    && isTikTok(request.resource.data.tiktok)
+                    && isYouTube(request.resource.data.youtube);
+
+      allow update: if isSignedIn() && isOwner(uid) && isNotBanned()
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                       .hasOnly(['displayName', 'photoUrl', 'specialty', 'bio', 'instagram', 'tiktok', 'youtube', 'updatedAt'])
+                    && request.resource.data.updatedAt == request.time
+                    && request.resource.data.displayName is string && request.resource.data.displayName.size() <= 50
+                    && request.resource.data.bio is string && request.resource.data.bio.size() <= 300
+                    && request.resource.data.specialty is string && request.resource.data.specialty.size() <= 100
+                    && isOwnStorageUrl(uid, request.resource.data.photoUrl)
+                    && isInstagram(request.resource.data.instagram)
+                    && isTikTok(request.resource.data.tiktok)
+                    && isYouTube(request.resource.data.youtube);
+
+      allow write: if false;
+    }
+
+    match /users/{uid}/private/profile {
+      allow read: if isSignedIn() && (isOwner(uid) || isAdmin());
+      allow update: if isSignedIn() && isOwner(uid) && isNotBanned()
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                       .hasOnly(['fcmTokens', 'phoneNumber'])
+                    && request.resource.data.fcmTokens is list
+                    && request.resource.data.fcmTokens.size() <= 5
+                    && request.resource.data.fcmTokens.all(t => t is string);
+      allow create: if false;
+      allow delete: if false;
+    }
+
+    // --- ARTIST APPLICATIONS ---
+    match /artist_applications/{uid} {
+      allow read: if isSignedIn() && (isOwner(uid) || isAdmin());
+      allow create: if isSignedIn() && isOwner(uid) && isNotBanned() && isEmailVerified()
+                    && request.resource.data.status == 'pending'
+                    && request.resource.data.submittedAt == request.time
+                    && request.resource.data.keys().hasOnly(['displayName', 'specialty', 'portfolioLink', 'videoLink', 'status', 'submittedAt'])
+                    && request.resource.data.displayName is string && request.resource.data.displayName.size() <= 50
+                    && request.resource.data.specialty is string && request.resource.data.specialty.size() <= 100
+                    && isHttpsUrl(request.resource.data.portfolioLink)
+                    && isHttpsUrl(request.resource.data.videoLink)
+                    && !exists(/databases/$(database)/documents/artist_applications/$(uid));
+      allow update: if isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+      allow delete: if isAdmin();
+    }
+
+    // --- STREAMS ---
+    match /streams/{streamId} {
+      allow read: if isSignedIn() && isNotBanned();
+      allow write: if false;
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && isNotBanned();
+        allow create: if false;
+        allow update: if isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isDeleted', 'isFlagged']);
+        allow delete: if isSignedIn() && isNotBanned() && (
+          isOwner(resource.data.uid) ||
+          isAdmin() ||
+          (hasRole('artist') && (get(/databases/$(database)/documents/streams/$(streamId)).data.hostUid == request.auth.uid))
+        );
+      }
+    }
+
+    // --- ANNOUNCEMENTS ---
+    match /announcements/{id} {
+      allow read: if isSignedIn() && isNotBanned();
+      allow create: if isSignedIn() && isNotBanned() && isEmailVerified() && (hasRole('artist') || isAdmin())
+                    && request.resource.data.authorUid == request.auth.uid
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.keys().hasOnly(['authorUid', 'authorName', 'title', 'body', 'imageUrl', 'link', 'isPriority', 'isPinned', 'createdAt'])
+                    && request.resource.data.title is string && request.resource.data.title.size() <= 100
+                    && request.resource.data.body is string && request.resource.data.body.size() <= 1000
+                    && (request.resource.data.link == '' || isHttpsUrl(request.resource.data.link))
+                    && (request.resource.data.imageUrl == '' || (isHttpsUrl(request.resource.data.imageUrl) && request.resource.data.imageUrl.contains('announcements/' + request.auth.uid + '/')))
+                    && (isAdmin() ? true : (request.resource.data.isPriority == false && request.resource.data.isPinned == false));
+      allow update: if isSignedIn() && isNotBanned() && (isOwner(resource.data.authorUid) || isAdmin())
+                    && (isAdmin() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPriority', 'isPinned']));
+      allow delete: if isSignedIn() && isNotBanned() && (isOwner(resource.data.authorUid) || isAdmin());
+    }
+
+    // --- OTHERS ---
+    match /auditions/{id} {
+      allow create: if isSignedIn() && isNotBanned() && isEmailVerified()
+                    && request.resource.data.userUid == request.auth.uid
+                    && request.resource.data.status == 'pending'
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.keys().hasOnly(['userUid', 'name', 'specialty', 'contact', 'portfolioLink', 'videoLink', 'status', 'createdAt'])
+                    && isHttpsUrl(request.resource.data.portfolioLink)
+                    && isHttpsUrl(request.resource.data.videoLink);
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /reports/{id} {
+      allow create: if isSignedIn() && isNotBanned()
+                    && request.resource.data.reporterUid == request.auth.uid
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.keys().hasOnly(['reporterUid', 'targetType', 'targetId', 'reason', 'createdAt'])
+                    && request.resource.data.targetType in ['user', 'stream', 'message']
+                    && request.resource.data.reason is string && request.resource.data.reason.size() <= 500;
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /audit_logs/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /user_cooldowns/{docId} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

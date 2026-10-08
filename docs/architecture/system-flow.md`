@@ -1,0 +1,33 @@
+# High-Level Architecture
+**Project:** TalentHub+
+
+## 1. System Flow
+The application follows a unidirectional data flow orchestrated by Riverpod.
+
+### Data Pipeline (Hybrid Orchestrator)
+1. **Real-time Path (Live Tab):**
+   Firestore $\rightarrow$ `LiveRepository (Stream)` $\rightarrow$ `LiveStateProvider` $\rightarrow$ `LiveCard`.
+   *Purpose: Instant updates when artists go live.*
+
+2. **Cached Path (Announcements/Artists):**
+   Firestore $\rightarrow$ `StaticRepository (Future)` $\rightarrow$ `PaginationProvider` $\rightarrow$ `ContentCard`.
+   *Purpose: Performance and cost-efficiency.*
+
+## 2. The Video Pipeline (AWS IVS)
+### Broadcaster (Artist)
+- **SDK:** Native AWS IVS Broadcast SDK.
+- **Bridge:** Flutter Platform Channels $\rightarrow$ Native Android/iOS.
+- **Auth:** `startBroadcasting` Callable $\rightarrow$ IVS API $\rightarrow$ Stream Key $\rightarrow$ App.
+
+### Viewer (Viewer/Artist/Admin)
+- **SDK:** AWS IVS Player SDK.
+- **Bridge:** Flutter Platform Views.
+- **Auth:** `getPlaybackToken` Callable $\rightarrow$ IVS Signed URL $\rightarrow$ Player.
+
+## 3. Navigation Strategy
+**Nested PageView Architecture:**
+- **Outer PageView (Horizontal):** Switches between the three primary feeds.
+- **Inner PageView.builder (Vertical):** TikTok-style scroll for content.
+- **Sync:** The Top Tab Bar is bidirectionally synced with the Outer PageView.
+- **Lifecycle:** `AutomaticKeepAliveClientMixin` prevents reel reset on tab switch.
+- **Player Management:** `VideoPlayerManager` singleton ensures exactly one active IVS player, disposing immediately on slide.

@@ -1,36 +1,41 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:talenthub/core/theme/app_theme.dart';
-import 'package:talenthub/core/router/router.dart';
+import 'package:go_router/go_router.dart';
+import 'package:flutter/foundation.dart';
+import 'core/theme/app_theme.dart';
+import 'design_showcase.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  try {
-    await Firebase.initializeApp();
-  } catch (e) {
-    debugPrint('Firebase initialization failed: $e');
-  }
-
-  runApp(
-    const ProviderScope(
-      child: MyApp(),
-    ),
-  );
+  runApp(const ProviderScope(child: TalentHubApp()));
 }
 
-class MyApp extends ConsumerWidget {
-  const MyApp({super.key});
+class TalentHubApp extends ConsumerWidget {
+  const TalentHubApp({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final router = ref.watch(routerProvider);
+    final _router = GoRouter(
+      initialLocation: '/',
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (context, state) => const Scaffold(
+            body: Center(child: Text('Placeholder Home')),
+          ),
+        ),
+        if (kDebugMode)
+          GoRoute(
+            path: '/showcase',
+            builder: (context, state) => const DesignShowcase(),
+          ),
+      ],
+    );
 
     return MaterialApp.router(
-      title: 'TalentHub',
-      theme: AppTheme.lightTheme,
-      routerConfig: router,
+      title: 'TalentHub+',
+      theme: AppTheme.darkTheme,
+      routerConfig: _router,
       debugShowCheckedModeBanner: false,
     );
   }

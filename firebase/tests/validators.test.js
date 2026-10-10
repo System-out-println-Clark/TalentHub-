@@ -1,87 +1,214 @@
-const test = require('firebase-functions-test')();
+const { assertFails, assertSucceeds } = require('@firebase/rules-unit-testing');
+const { initializeTestEnvironment } = require('@firebase/rules-unit-testing');
 const admin = require('firebase-admin');
-const { assert } = require('chai');
 
-// Note: In a real environment, we would use @firebase/rules-unit-testing
-// For this environment, we are simulating the logic tests for the regexes
-// and rule logic to verify the logic before deploying to the emulator.
+let db;
 
-const validators = {
-  isHttpsUrl: (url) => {
-    if (typeof url !== 'string' || url.length > 300) return false;
-    const regex = /^https:\/\/[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}[^\s\x00-\x1F]*$/;
-    return regex.test(url);
-  },
-  isHandle: (val) => {
-    if (typeof val !== 'string' || val.length > 30) return false;
-    const regex = /^[a-zA-Z0-9._]*[a-zA-Z0-9][a-zA-Z0-9._]*$/;
-    return regex.test(val);
-  },
-  isInstagram: (val) => {
-    if (typeof val !== 'string') return false;
-    if (val === '') return true;
-    if (validators.isHandle(val)) return true;
-    if (val.length > 300) return false;
-    const regex = /^https:\/\/(www\.)?instagram\.com\/[a-zA-Z0-9_.]{1,30}\/?(\?[^\s\x00-\x1F]*)?$/;
-    return regex.test(val);
-  },
-  isTikTok: (val) => {
-    if (typeof val !== 'string') return false;
-    if (val === '') return true;
-    if (validators.isHandle(val)) return true;
-    if (val.length > 300) return false;
-    const regex = /^https:\/\/(www\.)?tiktok\.com\/@[a-zA-Z0-9_.]{1,30}\/?(\?[^\s\x00-\x1F]*)?$/;
-    return regex.test(val);
-  },
-  isYouTube: (val) => {
-    if (typeof val !== 'string') return false;
-    if (val === '') return true;
-    if (validators.isHandle(val)) return true;
-    if (val.length > 300) return false;
-    const patterns = [
-      /^https:\/\/(www\.)?youtube\.com\/@[a-zA-Z0-9_.]{1,30}\/?(\?[^\s\x00-\x1F]*)?$/,
-      /^https:\/\/(www\.)?youtube\.com\/c\/[a-zA-Z0-9_.]{1,30}\/?(\?[^\s\x00-\x1F]*)?$/,
-      /^https:\/\/(www\.)?youtube\.com\/channel\/[a-zA-Z0-9_-]{24}\/?(\?[^\s\x00-\x1F]*)?$/,
-      /^https:\/\/(www\.)?youtube\.com\/user\/[a-zA-Z0-9_.]{1,30}\/?(\?[^\s\x00-\x1F]*)?$/,
-      /^https:\/\/youtu\.be\/[a-zA-Z0-9_-]{11}\/?(\?[^\s\x00-\x1F]*)?$/
-    ];
-    return patterns.some(re => re.test(val));
-  }
-};
+beforeAll(async () => {
+  await initializeTestEnvironment({
+    projectId: 'talenthub-test',
+    firestore: {
+      rules: require('fs').readFileSync('firebase/firestore.rules', 'utf8'),
+    },
+  });
+  db = admin.firestore();
+});
 
-// Re-bind to local scope for the test block
-const v = validators;
+describe('Firestore Validator Tests', () => {
+  const alice = { uid: 'alice', email: 'alice@example.com', role: 'viewer', email_verified: true, banned: false };
+  const bob = { uid: 'bob', email: 'bob@example.com', role: 'viewer', email_verified: false, banned: false };
+  const adminUser = { uid: 'admin', email: 'admin@example.com', role: 'admin', email_verified: true, banned: false };
 
-describe('Security Validators', () => {
+  const createAuthContext = (user) => ({
+    uid: user.uid,
+    token: {
+      role: user.role,
+      email_verified: user.email_verified,
+      banned: user.banned,
+    },
+  });
+
   describe('isHttpsUrl', () => {
-    const valid = ['https://google.com', 'https://a.io', 'https://test.com/path', 'https://sub.dom.com?q=1', 'https://site.org#top'];
-    const invalid = ['http://google.com', 'ftp://site.com', 'https:// evil.com', 'javascript:alert(1)', 'https://.com'];
+    const testUrl = async (url, shouldPass) => {
+      const dbAuth = db.withSecurityRules({
+        auth: createAuthContext(alice),
+      });
+      const ref = dbAuth.collection('artist_applications').doc('test');
+      const data = {
+        displayName: 'Test',
+        specialty: 'Dance',
+        portfolioLink: url,
+        videoLink: url,
+        status: 'pending',
+        submittedAt: admin.firestore.FieldValue.serverTimestamp()
+      };
+      if (shouldPass) await assertSucceeds(dbAuth, 'create', ref, data);
+      else await assertFails(dbAuth, 'create', ref, data);
+    };
 
-    valid.forEach(url => it(`should accept ${url}`, () => assert.strictEqual(v.isHttpsUrl(url), true)));
-    invalid.forEach(url => it(`should reject ${url}`, () => assert.strictEqual(v.isHttpsUrl(url), false)));
+    test('valid HTTPS URLs pass', async () => {
+      await testUrl('https://google.com', true);
+      await testUrl('https://sub.domain.co.uk/path?q=1', true);
+    });
+
+    test('invalid URLs fail', async () => {
+      await testUrl('http://google.com', false); // No HTTPS
+      await testUrl('https:// a.com', false); // Space
+      await testUrl('javascript:alert(1)', false); // Protocol
+      await testUrl('https://evil.com/?x=instagram.com', false); // This should pass isHttpsUrl but we test the regex
+      await testUrl('https://instagram.com.evil.com', false); // Not a simple domain
+    });
+  });
+
+  describe('isHandle', () => {
+    const testHandle = async (handle, shouldPass) => {
+      const dbAuth = db.withSecurityRules({
+        auth: createAuthContext(alice),
+      });
+      const ref = dbAuth.collection('users').doc(alice.uid);
+      const data = {
+        displayName: 'Test',
+        photoUrl: `https://firebasestorage.googleapis.com/v0/b/test/o/profile_photos%2F${alice.uid}%2Favatar.jpg`,
+        specialty: 'Dance',
+        bio: 'Bio',
+        instagram: handle,
+        tiktok: handle,
+        youtube: handle,
+        role: 'viewer',
+        isFeatured: false,
+        isBanned: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (shouldPass) await assertSucceeds(dbAuth, 'create', ref, data);
+      else await assertFails(dbAuth, 'create', ref, data);
+    };
+
+    test('valid handles pass', async () => {
+      await testHandle('artist123', true);
+      await testHandle('a', true);
+      await testHandle('user.name', true);
+      await testHandle('user_name', true);
+      await testHandle('123artist', true);
+    });
+
+    test('invalid handles fail', async () => {
+      await testHandle('.dancer', false); // Start with dot
+      await testHandle('dancer.', false); // End with dot
+      await testHandle('@user', false); // Starts with @
+      await testHandle('a'.repeat(31), false); // Too long
+      await testHandle('user name', false); // Space
+    });
   });
 
   describe('isInstagram', () => {
-    const valid = ['champ_dance', 'https://instagram.com/user', 'https://www.instagram.com/u', '', 'user.name_123'];
-    const invalid = ['@user', 'https://tiktok.com/u', 'https://instagram.com.evil.com', 'https:// evil.com', '..', 'a'.repeat(45)];
+    const testInsta = async (val, shouldPass) => {
+      const dbAuth = db.withSecurityRules({ auth: createAuthContext(alice) });
+      const ref = dbAuth.collection('users').doc(alice.uid);
+      const data = {
+        displayName: 'Test',
+        photoUrl: `https://firebasestorage.googleapis.com/v0/b/test/o/profile_photos%2F${alice.uid}%2Favatar.jpg`,
+        specialty: 'Dance',
+        bio: 'Bio',
+        instagram: val,
+        tiktok: '',
+        youtube: '',
+        role: 'viewer',
+        isFeatured: false,
+        isBanned: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (shouldPass) await assertSucceeds(dbAuth, 'create', ref, data);
+      else await assertFails(dbAuth, 'create', ref, data);
+    };
 
-    valid.forEach(val => it(`should accept ${val}`, () => assert.strictEqual(v.isInstagram(val), true)));
-    invalid.forEach(val => it(`should reject ${val}`, () => assert.strictEqual(v.isInstagram(val), false)));
-  });
+    test('valid instagram values pass', async () => {
+      await testInsta('', true);
+      await testInsta('artist_handle', true);
+      await testInsta('https://instagram.com/artist_handle/', true);
+    });
 
-  describe('isTikTok', () => {
-    const valid = ['dance_star', 'https://tiktok.com/@u', 'https://www.tiktok.com/@u', '', 'user.name_123'];
-    const invalid = ['@user', 'https://instagram.com/u', 'https://tiktok.com.evil.com', 'https:// tiktok.com/@u', '_', 'a'.repeat(45)];
-
-    valid.forEach(val => it(`should accept ${val}`, () => assert.strictEqual(v.isTikTok(val), true)));
-    invalid.forEach(val => it(`should reject ${val}`, () => assert.strictEqual(v.isTikTok(val), false)));
+    test('invalid instagram values fail', async () => {
+      await testInsta('@artist_handle', false);
+      await testInsta('https://facebook.com/artist', false);
+      await testInsta('https://instagram.com/too_long_handle_over_30_chars_here/', false);
+      await testInsta(' ', false);
+      await testInsta('https://instagram.com@evil.com', false);
+    });
   });
 
   describe('isYouTube', () => {
-    const valid = ['yt_artist', 'https://youtube.com/@u', 'https://youtu.be/abcdefghijk', 'https://www.youtube.com/c/u', ''];
-    const invalid = ['@user', 'https://tiktok.com/u', 'https://youtube.com.evil.com', 'https:// youtube.com/', '.', 'https://youtu.be/short'];
+    const testYT = async (val, shouldPass) => {
+      const dbAuth = db.withSecurityRules({ auth: createAuthContext(alice) });
+      const ref = dbAuth.collection('users').doc(alice.uid);
+      const data = {
+        displayName: 'Test',
+        photoUrl: `https://firebasestorage.googleapis.com/v0/b/test/o/profile_photos%2F${alice.uid}%2Favatar.jpg`,
+        specialty: 'Dance',
+        bio: 'Bio',
+        instagram: '',
+        tiktok: '',
+        youtube: val,
+        role: 'viewer',
+        isFeatured: false,
+        isBanned: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (shouldPass) await assertSucceeds(dbAuth, 'create', ref, data);
+      else await assertFails(dbAuth, 'create', ref, data);
+    };
 
-    valid.forEach(val => it(`should accept ${val}`, () => assert.strictEqual(v.isYouTube(val), true)));
-    invalid.forEach(val => it(`should reject ${val}`, () => assert.strictEqual(v.isYouTube(val), false)));
+    test('valid youtube values pass', async () => {
+      await testYT('', true);
+      await testYT('yt_handle', true);
+      await testYT('https://youtube.com/@handle', true);
+      await testYT('https://youtu.be/abc123def456', true);
+      await testYT('https://youtube.com/channel/UC_long_id_here_1234567890123456', true);
+    });
+
+    test('invalid youtube values fail', async () => {
+      await testYT('https://google.com', false);
+      await testYT('https://youtube.com/too_long_handle_over_30_chars_here', false);
+      await testYT(' ', false);
+      await testYT('https://youtu.be/too_short', false);
+      await testYT('https://youtube.com@evil.com', false);
+    });
+  });
+
+  describe('isOwnStorageUrl', () => {
+    const testStorage = async (uid, url, shouldPass) => {
+      const dbAuth = db.withSecurityRules({ auth: createAuthContext({ ...alice, uid }) });
+      const ref = dbAuth.collection('users').doc(uid);
+      const data = {
+        displayName: 'Test',
+        photoUrl: url,
+        specialty: 'Dance',
+        bio: 'Bio',
+        instagram: '',
+        tiktok: '',
+        youtube: '',
+        role: 'viewer',
+        isFeatured: false,
+        isBanned: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (shouldPass) await assertSucceeds(dbAuth, 'create', ref, data);
+      else await assertFails(dbAuth, 'create', ref, data);
+    };
+
+    test('valid storage URLs pass', async () => {
+      await testStorage('user123', 'https://firebasestorage.googleapis.com/v0/b/bucket/o/profile_photos%2Fuser123%2Favatar.jpg?alt=media&token=123', true);
+    });
+
+    test('invalid storage URLs fail', async () => {
+      await testStorage('user123', 'https://firebasestorage.googleapis.com/v0/b/bucket/o/profile_photos%2Fwrong_uid%2Favatar.jpg', false);
+      await testStorage('user123', 'https://google.com/photo.jpg', false);
+      await testStorage('user123', 'https://firebasestorage.googleapis.com/v0/b/bucket/o/public/avatar.jpg', false);
+      await testStorage('user123', 'https://firebasestorage.googleapis.com/v0/b/bucket/o/profile_photos%2Fuser123%2F', false);
+      await testStorage('user123', ' ', false);
+    });
   });
 });

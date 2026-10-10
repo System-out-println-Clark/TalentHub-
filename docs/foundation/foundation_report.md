@@ -1,4 +1,5 @@
-# Foundation Implementation Report: The Steel Thread
+// This file has been archived to docs/archive/foundation_report.md as per project documentation restructuring.
+
 
 ## Status Overview
 The foundational authentication and routing layer (the "Steel Thread") has been implemented. The application is structurally ready for feature development, although it requires a project-specific Firebase configuration to be runnable on a device.

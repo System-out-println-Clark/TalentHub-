@@ -15,7 +15,8 @@ service cloud.firestore {
     }
 
     function isHandle(val) {
-      return val is string && val.size() <= 30 && val.matches('^[a-zA-Z0-9._]*[a-zA-Z0-9][a-zA-Z0-9._]*$');
+      return val is string && val.size() >= 1 && val.size() <= 30 &&
+             (val.size() == 1 ? val.matches('^[a-zA-Z0-9]$') : val.matches('^[a-zA-Z0-9][a-zA-Z0-9._]{0,28}[a-zA-Z0-9]$'));
     }
 
     function isInstagram(val) {
@@ -38,8 +39,8 @@ service cloud.firestore {
 
     function isOwnStorageUrl(uid, url) {
       // Validates that the URL is from our Firebase Storage and points to the user's profile photo path.
-      // Handles %2F encoding for the '/' character in storage paths.
-      return url is string && url.size() <= 300 && url.matches('^https://firebasestorage\\.googleapis\\.com/v0/b/[^/]+/o/profile_photos%2F' + uid + '/[^\\s\\x00-\\x1F]*$');
+      // Handles %2F encoding for the '/' character in storage paths and allows tokens.
+      return url is string && url.size() <= 500 && url.matches('^https://firebasestorage\\.googleapis\\.com/v0/b/[^/]+/o/profile_photos%2F' + uid + '%2F[^\\s\\x00-\\x1F]*$');
     }
 
     // --- USERS ---
